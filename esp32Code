@@ -1,0 +1,235 @@
+#include <Wire.h>
+#include <MPU6050.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ESP32Servo.h>
+
+// Motor and ESC Pins
+#define MOTOR_FL 5   // Front-left motor
+#define MOTOR_FR 18  // Front-right motor
+#define MOTOR_BL 19  // Back-left motor
+#define MOTOR_BR 23  // Back-right motor
+
+// MPU6050 Pins
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+// Wi-Fi Access Point credentials
+const char *ssid = "Afg_drone";   
+const char *password = "87654321";
+
+// MPU6050 Sensor
+MPU6050 mpu;
+
+// Web server
+WebServer server(80);
+
+// Motor control
+Servo motorFL, motorFR, motorBL, motorBR;
+
+// Drone state
+int throttle = 1000, roll = 0, pitch = 0, yaw = 0;
+bool isFlying = false;
+
+void setup() {
+    Serial.begin(115200);  // Initialize serial communication for debugging
+
+    // Initialize Motors
+    motorFL.attach(MOTOR_FL);
+    motorFR.attach(MOTOR_FR);
+    motorBL.attach(MOTOR_BL);
+    motorBR.attach(MOTOR_BR);
+
+    // Initialize I2C for MPU6050
+    Wire.begin(SDA_PIN, SCL_PIN);
+    mpu.initialize();
+
+    // Start ESP32 as Wi-Fi AP
+    WiFi.softAP(ssid, password);
+    Serial.print("ESP32 AP IP: ");
+    Serial.println(WiFi.softAPIP());
+
+    // Web Server Routes
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/control", HTTP_POST, handleControl);
+    server.begin();
+}
+
+void loop() {
+    server.handleClient();
+}
+
+// Handle Control via Joystick & Keyboard
+void handleControl() {
+    // Debug: print the incoming control values to the serial monitor
+    if (server.hasArg("throttle")) {
+        throttle = server.arg("throttle").toInt();
+        Serial.print("Throttle: ");
+        Serial.println(throttle);
+    }
+    if (server.hasArg("roll")) {
+        roll = server.arg("roll").toInt();
+        Serial.print("Roll: ");
+        Serial.println(roll);
+    }
+    if (server.hasArg("pitch")) {
+        pitch = server.arg("pitch").toInt();
+        Serial.print("Pitch: ");
+        Serial.println(pitch);
+    }
+    if (server.hasArg("yaw")) {
+        yaw = server.arg("yaw").toInt();
+        Serial.print("Yaw: ");
+        Serial.println(yaw);
+    }
+
+    // Debug: Print motor PWM signals to the serial monitor
+    Serial.print("Motor FL PWM: ");
+    Serial.println(throttle + roll + pitch + yaw);
+    Serial.print("Motor FR PWM: ");
+    Serial.println(throttle - roll + pitch - yaw);
+    Serial.print("Motor BL PWM: ");
+    Serial.println(throttle - roll - pitch + yaw);
+    Serial.print("Motor BR PWM: ");
+    Serial.println(throttle + roll - pitch - yaw);
+
+    // Send the control values to the motors (ensure PWM signal is within valid range)
+    // motorFL.writeMicroseconds(constrain(throttle + roll + pitch + yaw, 1000, 2000));  // Adjust with some logic for smooth control
+    // motorFR.writeMicroseconds(constrain(throttle - roll + pitch - yaw, 1000, 2000));
+    // motorBL.writeMicroseconds(constrain(throttle - roll - pitch + yaw, 1000, 2000));
+    // motorBR.writeMicroseconds(constrain(throttle + roll - pitch - yaw, 1000, 2000));
+
+    motorFL.writeMicroseconds(constrain(throttle + roll + pitch + yaw, 1100, 1900));
+    motorFR.writeMicroseconds(constrain(throttle - roll + pitch - yaw, 1100, 1900));
+    motorBL.writeMicroseconds(constrain(throttle - roll - pitch + yaw, 1100, 1900));
+    motorBR.writeMicroseconds(constrain(throttle + roll - pitch - yaw, 1100, 1900));
+
+
+    server.send(200, "text/plain", "Updated");
+}
+
+// Handle Root Page (Modern UI)
+void handleRoot() {
+    server.send(200, "text/html", R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ESP32 Drone Control</title>
+    <style>
+        body {
+            background-color: #121212;
+            color: white;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh
+            ;
+            margin: 0;
+            flex-direction: column;
+        }
+        h2 {
+            color: cyan;
+            margin-bottom: 20px;
+        }
+        .joystick-container {
+            width: 200px;
+            height: 200px;
+            position: relative;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            display: inline-block;
+            margin: 20px;
+        }
+        .joystick {
+            width: 50px;
+            height: 50px;
+            background: cyan;
+            border-radius: 50%;
+            position: absolute;
+            top: 75px;
+            left: 75px;
+            transition: 0.1s;
+        }
+        input[type=range] {
+            width: 300px;
+            margin-top: 20px;
+            -webkit-appearance: none;
+            height: 10px;
+            background: cyan;
+            border-radius: 5px;
+            outline: none;
+        }
+        .control-labels {
+            color: cyan;
+            margin-top: 10px;
+        }
+        .joystick-direction-labels {
+            display: flex;
+            justify-content: space-between;
+            width: 200px;
+            margin-top: 10px;
+        }
+    </style>
+    <script>
+        let throttle = 1000, roll = 0, pitch = 0, yaw = 0;
+        let joystick = document.querySelector('.joystick');
+
+        function sendControl() {
+            fetch('/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: throttle=${throttle}&roll=${roll}&pitch=${pitch}&yaw=${yaw}
+            });
+        }
+
+        function moveJoystick(x, y) {
+            roll = x * 100;
+            pitch = y * 100;
+            let joy = document.getElementById("joystick");
+            joy.style.transform = translate(${x * 50}px, ${y * 50}px);
+            sendControl();
+        }
+
+        function updateThrottle(value) {
+            throttle = value;
+            sendControl();
+        }
+
+        document.addEventListener("keydown", function(event) {
+            if (event.key === "w") moveJoystick(0, -1);
+            if (event.key === "s") moveJoystick(0, 1);
+            if (event.key === "a") moveJoystick(-1, 0);
+            if (event.key === "d") moveJoystick(1, 0);
+            if (event.key === "PageUp") updateThrottle(throttle + 50);
+            if (event.key === "PageDown") updateThrottle(throttle - 50);
+        });
+
+        document.addEventListener("keyup", function(event) {
+            if (["w", "s", "a", "d"].includes(event.key)) moveJoystick(0, 0);
+        });
+    </script>
+</head>
+<body>
+    <h2>ESP32 Drone Control</h2>
+
+    <div class="control-labels">
+        <p>Throttle Control</p>
+        <input type="range" min="1000" max="2000" value="1000" step="10" oninput="updateThrottle(this.value)">
+    </div>
+
+    <div class="joystick-container">
+        <div id="joystick" class="joystick"></div>
+    </div>
+
+    <div class="joystick-direction-labels">
+        <span>Up</span>
+        <span>Left</span>
+        <span>Right</span>
+        <span>Down</span>
+    </div>
+</body>
+</html>
+    )rawliteral");
+}
